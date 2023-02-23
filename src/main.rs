@@ -1,20 +1,25 @@
-use clap::Parser;
 use anyhow::{Context, Result};
-use regex::Regex;
-use std::collections::{HashSet, HashMap};
+use clap::Parser;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Parser)]
 struct Cli {
     // The file to look for
-    path: std::path::PathBuf
+    path: std::path::PathBuf,
 }
 
-fn main() -> Result<()>{
+// TODO refactor
+// struct Placeholder {
+//     mask: String
+// }
+
+fn main() -> Result<()> {
     let path = parse_file_path();
     let content = get_file_content(&path)?;
-    let masks = find_masked_inputs(&content);
-    prompt_user_inputs(&masks);
-    
+    let masks = find_placeholders(&content);
+    let replacements = prompt_user_inputs(&masks);
+    let result = replace_parts(&content, &replacements);
+    println!("{}", &result);
     Ok(())
 }
 
@@ -23,7 +28,7 @@ fn parse_file_path() -> String {
     args.path.as_os_str().to_str().unwrap().to_string()
 }
 
-fn get_file_content(path : &String) -> Result<String> {
+fn get_file_content(path: &String) -> Result<String> {
     println!("Opening the file {}", path);
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("could not read file `{}`", &path))?;
@@ -31,26 +36,67 @@ fn get_file_content(path : &String) -> Result<String> {
     Ok(content)
 }
 
-fn find_masked_inputs(input: &str) -> HashSet<String> {
-    let re = Regex::new(r"\{\{([^{}]+)\}\}").unwrap();
+/*
+We want the results to be ordered by apperance AND unique.
+Therefore we used a temporary Vec for ordering, and a helper HashSet to
+remove duplicates.
+*/
+fn find_placeholders(input: &str) -> Vec<String> {
+    let re = regex::Regex::new(r"\{\{([^{}]+)\}\}").unwrap();
+    // get the masks
     let matches = re.find_iter(input);
-    let contents: HashSet<String> = matches.map(|m| m.as_str().trim_matches(|c| c == '{' || c == '}' || c == ' ').to_owned()).collect();
-    contents
+    let contents = extract_contents(matches);
+    remove_duplicates(contents)
 }
 
-fn prompt_user_inputs(masks : &HashSet<String>) {
+// remove the outer brackets in the placeholders
+fn extract_contents(matches: regex::Matches) -> VecDeque<String> {
+    matches
+        .map(|m| {
+            m.as_str()
+                .trim_matches(|c| c == '{' || c == '}' || c == ' ')
+                .to_owned()
+        })
+        .collect()
+}
+
+fn remove_duplicates(contents: VecDeque<String>) -> Vec<String> {
+    let mut result: Vec<String> = Vec::with_capacity(contents.len());
+    let mut set: HashSet<String> = HashSet::new();
+    for content in contents {
+        if set.insert(content.clone()) {
+            result.push(content);
+        }
+    }
+    result
+}
+
+fn prompt_user_inputs(masks: &Vec<String>) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for input in masks {
         let value = prompt_single_input(input);
         map.insert(input.to_string(), value);
     }
+    println!("{:?}", map);
+    map
 }
 
-fn prompt_single_input(input: &str) -> String {
+fn prompt_single_input(placeholder: &str) -> String {
     let mut value = String::new();
-    println!("{}", input);
-    std::io::stdin().read_line(&mut value).expect("Failed to read input");
+    println!("What is the value for {}?", placeholder);
+    std::io::stdin()
+        .read_line(&mut value)
+        .expect("Failed to read input");
     value.trim().to_string()
+}
+
+fn replace_parts(input: &str, replacements: &HashMap<String, String>) -> String {
+    let mut output = input.to_string();
+    for (from, to) in replacements {
+        let from_temp = format!("{{{{{}}}}}", from);
+        output = output.replace(&from_temp, to);
+    }
+    output
 }
 
 #[cfg(test)]
@@ -58,51 +104,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_find_masked_inputs_empty() {
-        let input = "";
-        let expected: HashSet<String> = HashSet::new();
-        assert_eq!(find_masked_inputs(input), expected);
-    }
-
-    #[test]
-    fn test_find_masked_inputs_no_match() {
-        let input = "This is a test.";
-        let expected: HashSet<String> = HashSet::new();
-        assert_eq!(find_masked_inputs(input), expected);
-    }
-
-    #[test]
-    fn test_find_masked_inputs_single_match() {
-        let input = "This {{is}} a test.";
-        let mut expected: HashSet<String> = HashSet::new();
-        expected.insert(String::from("is"));
-        assert_eq!(find_masked_inputs(input), expected);
-    }
-
-    #[test]
-    fn test_find_masked_inputs_multiple_matches() {
-        let input = "{{This}} {{is}} a {{test}} with {{many}} {{masked}} inputs.";
-        let mut expected: HashSet<String> = HashSet::new();
-        expected.insert(String::from("This"));
-        expected.insert(String::from("is"));
-        expected.insert(String::from("test"));
-        expected.insert(String::from("many"));
-        expected.insert(String::from("masked"));
-        assert_eq!(find_masked_inputs(input), expected);
-    }
-
-    #[test]
-    fn test_find_masked_inputs_duplicate_matches() {
-        let input = "{{This}} is {{a}} {{test}} with {{many}} {{masked}} inputs. {{This}} {{is}} {{a}} {{test}} with {{many}} {{masked}} inputs.";
-        let mut expected: HashSet<String> = HashSet::new();
-        expected.insert(String::from("This"));
-        expected.insert(String::from("a"));
-        expected.insert(String::from("test"));
-        expected.insert(String::from("many"));
-        expected.insert(String::from("masked"));
-        expected.insert(String::from("is"));
-        assert_eq!(find_masked_inputs(input), expected);
+    fn test_find_masked_inputs() {
+        assert_eq!(
+            find_placeholders("Hello {{world}}, {{world}}"),
+            ["world".to_string()]
+        );
+        assert_eq!(
+            find_placeholders("{{a}} b {{a}} c {{b}}"),
+            ["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(find_placeholders(""), Vec::<String>::new());
     }
 }
-
-
