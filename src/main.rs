@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::collections::{HashMap, HashSet, VecDeque};
+mod utils;
 
 #[derive(Parser)]
 struct Cli {
@@ -20,6 +21,7 @@ fn main() -> Result<()> {
     let replacements = prompt_user_inputs(&masks);
     let result = replace_parts(&content, &replacements);
     println!("{}", &result);
+    let _ = utils::set_clipboard_content(&result);
     Ok(())
 }
 
